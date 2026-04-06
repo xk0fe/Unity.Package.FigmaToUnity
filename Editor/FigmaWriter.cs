@@ -78,11 +78,16 @@ namespace Figma
             Dictionary<string, IReadOnlyList<string>> framesPaths = new(rootNodes.Frames.Count);
 
             foreach (CanvasNode canvasNode in rootNodes.Canvases)
-                framesPaths.Add(canvasNode.name, new List<string>());
+            {
+                framesPaths.TryAdd(canvasNode.name, new List<string>());
+                // also register section names so section-parented frames can add their paths
+                foreach (SectionNode section in canvasNode.children.OfType<SectionNode>())
+                    framesPaths.TryAdd(section.name, new List<string>());
+            }
 
             List<Task> tasks = new(rootNodes.Frames.Count + rootNodes.ComponentSets.Count + rootNodes.Elements.Count);
             tasks.AddRange(rootNodes.Frames.Select(x => Task.Run(() => WriteFrame(uxmlBuilder, framesPaths, componentSets, x))));
-            tasks.AddRange(rootNodes.ComponentSets.Select(x => Task.Run(() => WriteComponentSet(uxmlBuilder, x))));
+            tasks.AddRange(rootNodes.ComponentSets.Select(x => Task.Run(() => WriteComponentSet(uxmlBuilder, componentSets, x))));
             tasks.AddRange(rootNodes.Elements.Select(x => Task.Run(() => WriteTemplate(uxmlBuilder, x))));
 
             await Task.WhenAll(tasks);
@@ -94,7 +99,7 @@ namespace Figma
         #endregion
 
         #region Support Methods
-        void WriteFrame(UxmlBuilder uxmlBuilder, Dictionary<string, IReadOnlyList<string>> framesPaths, Dictionary<string, ComponentSetNode> componentSets, FrameNode frameNode)
+        void WriteFrame(UxmlBuilder uxmlBuilder, Dictionary<string, IReadOnlyList<string>> framesPaths, Dictionary<string, ComponentSetNode> componentSets, DefaultFrameNode frameNode)
         {
             Dictionary<string, string> templates = new();
 
@@ -115,17 +120,22 @@ namespace Figma
 
                     if (node is InstanceNode instanceNode)
                     {
-                        Component component = data.components[instanceNode.componentId];
+                        if (!data.components.TryGetValue(instanceNode.componentId, out Component component))
+                            continue;
 
                         if (component == null || component.remote || string.IsNullOrEmpty(component.componentSetId))
                             continue;
 
-                        Component componentSet = data.componentSets[component.componentSetId];
+                        if (!data.componentSets.TryGetValue(component.componentSetId, out Component componentSet))
+                            continue;
 
                         if (componentSet == null || componentSet.remote)
                             continue;
 
-                        string template = componentSets[component.componentSetId].name;
+                        if (!componentSets.TryGetValue(component.componentSetId, out ComponentSetNode componentSetNode))
+                            continue;
+
+                        string template = componentSetNode.name;
                         templates[template] = CombinePath(directory, componentsDirectoryName, $"{template}.{KnownFormats.uxml}");
                     }
                     else if (nodeMetadata.GetTemplate(node) is (_, { } template) && template.NotNullOrEmpty())
@@ -144,23 +154,74 @@ namespace Figma
             if (!Directory.Exists(rootDirectory))
                 Directory.CreateDirectory(rootDirectory);
 
-            using UssWriter ussWriter = new(directory, CombinePath(rootDirectory, $"{frameNode.name}.{KnownFormats.uss}"));
+            // strip leading dot and replace slashes so Figma names don't create hidden files or subdirectories on unix
+            string frameName = frameNode.name.TrimStart('.').Replace('/', '-');
+            using UssWriter ussWriter = new(directory, CombinePath(rootDirectory, $"{frameName}.{KnownFormats.uss}"));
             ussWriter.Write(stylesPreprocessor.GetStyles(frameNode).IndexRedundantNames(x => x.Name, (style, postfix) => style.Name += postfix, index => "-" + (index + 1).NumberToWords()));
 
             FindTemplates(frameNode);
 
-            string uxmlPath = uxmlBuilder.CreateFrame(rootDirectory, new[] { ussPath, ussWriter.Path }, templates, frameNode);
-            framesPaths[frameNode.parent.name].As<List<string>>().Add(uxmlPath);
+            string uxmlPath = uxmlBuilder.CreateFrame(rootDirectory, new[] { ussPath, ussWriter.Path }, templates, frameNode, frameName);
+            if (framesPaths.TryGetValue(frameNode.parent.name, out IReadOnlyList<string> pathList))
+                pathList.As<List<string>>().Add(uxmlPath);
 
             assetsInfo.AddModifiedFiles(uxmlPath, ussWriter.Path);
             templates.Clear();
         }
-        void WriteComponentSet(UxmlBuilder uxmlBuilder, ComponentSetNode componentSet)
+        void WriteComponentSet(UxmlBuilder uxmlBuilder, Dictionary<string, ComponentSetNode> componentSets, ComponentSetNode componentSet)
         {
+            Dictionary<string, string> templates = new();
+
+            void FindTemplates(BaseNode root)
+            {
+                Stack<BaseNode> nodes = new();
+                nodes.Push(root);
+
+                for (int depth = 0; depth < Const.maximumAllowedDepthLimit; depth++)
+                {
+                    if (nodes.Count == 0)
+                        return;
+
+                    BaseNode node = nodes.Pop();
+
+                    if (!node.IsVisible() || !nodeMetadata.EnabledInHierarchy(node))
+                        continue;
+
+                    if (node is InstanceNode instanceNode)
+                    {
+                        if (!data.components.TryGetValue(instanceNode.componentId, out Component component))
+                            continue;
+
+                        if (component == null || component.remote || string.IsNullOrEmpty(component.componentSetId))
+                            continue;
+
+                        if (!data.componentSets.TryGetValue(component.componentSetId, out Component componentSetMeta))
+                            continue;
+
+                        if (componentSetMeta == null || componentSetMeta.remote)
+                            continue;
+
+                        if (!componentSets.TryGetValue(component.componentSetId, out ComponentSetNode componentSetNode))
+                            continue;
+
+                        string template = componentSetNode.name;
+                        templates[template] = CombinePath(directory, componentsDirectoryName, $"{template}.{KnownFormats.uxml}");
+                    }
+
+                    if (node is DefaultFrameNode frameNode)
+                        foreach (SceneNode child in frameNode.children)
+                            nodes.Push(child);
+                }
+
+                throw new System.InvalidOperationException(Const.maximumDepthLimitReachedExceptionMessage);
+            }
+
             using UssWriter ussWriter = new(directory, CombinePath(directory, componentsDirectoryName, $"{componentSet.name}.{KnownFormats.uss}"));
             ussWriter.Write(stylesPreprocessor.GetStyles(componentSet).IndexRedundantNames(x => x.Name, (style, postfix) => style.Name += postfix, index => "-" + (index + 1).NumberToWords()));
 
-            string uxmlPath = uxmlBuilder.CreateComponentSet(CombinePath(directory, componentsDirectoryName), new[] { ussPath, ussWriter.Path }, componentSet);
+            FindTemplates(componentSet);
+
+            string uxmlPath = uxmlBuilder.CreateComponentSet(CombinePath(directory, componentsDirectoryName), new[] { ussPath, ussWriter.Path }, templates, componentSet);
             assetsInfo.AddModifiedFiles(uxmlPath, ussWriter.Path);
         }
         void WriteTemplate(UxmlBuilder uxmlBuilder, (DefaultShapeNode element, string template) node)

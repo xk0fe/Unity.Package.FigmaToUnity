@@ -18,6 +18,8 @@ namespace Figma.Attributes
         public string[] DocumentPreserve { get; }
         public UxmlDownloadImages DownloadImages { get; }
         public UxmlElementTypeIdentification TypeIdentification { get; }
+        // optional Figma node ID — when set, skips the full-file discovery fetch and uses this ID directly
+        public string NodeId { get; set; }
         #endregion
 
         #region Constructors

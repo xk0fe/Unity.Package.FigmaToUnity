@@ -420,11 +420,12 @@ namespace Figma.Core.Uss
             bool forceAutoVertical = false;
             if (parent.layoutMode is LayoutMode.NONE || layout.layoutPositioning is LayoutPositioning.ABSOLUTE)
             {
-                forceAutoHorizontal = layout.constraints.horizontal is ConstraintHorizontal.SCALE or ConstraintHorizontal.LEFT_RIGHT;
-                forceAutoVertical = layout.constraints.vertical is ConstraintVertical.SCALE or ConstraintVertical.TOP_BOTTOM;
+                forceAutoHorizontal = layout.constraints?.horizontal is ConstraintHorizontal.SCALE or ConstraintHorizontal.LEFT_RIGHT;
+                forceAutoVertical = layout.constraints?.vertical is ConstraintVertical.SCALE or ConstraintVertical.TOP_BOTTOM;
 
                 position = Position.Absolute;
-                SetPositioning(parent);
+                if (layout.constraints != null)
+                    SetPositioning(parent);
             }
             else
             {
@@ -501,7 +502,7 @@ namespace Figma.Core.Uss
                 TextAlignHorizontal.LEFT => nameof(left),
                 TextAlignHorizontal.RIGHT => nameof(right),
                 TextAlignHorizontal.CENTER => "center",
-                TextAlignHorizontal.JUSTIFIED => throw new NotSupportedException(),
+                TextAlignHorizontal.JUSTIFIED => nameof(left), // UI Toolkit has no justified alignment
                 _ => throw new NotSupportedException()
             };
             string vertical = style.textAlignVertical switch
@@ -539,7 +540,7 @@ namespace Figma.Core.Uss
             if (blend.opacity < 1.0 - tolerance)
                 opacity = UssStyleExtension.AlphaCorrection(blend.opacity);
 
-            IEnumerable<ShadowEffect> effects = blend.effects.OfType<ShadowEffect>().Where(x => x.visible);
+            IEnumerable<ShadowEffect> effects = (blend.effects ?? Array.Empty<Effect>()).OfType<ShadowEffect>().Where(x => x.visible);
             ShadowEffect effect = effects.FirstOrDefault();
             if (effect == null)
                 return;
@@ -667,7 +668,7 @@ namespace Figma.Core.Uss
             bool urlExists = false;
             string url = string.Empty;
             RGBA finalColor = new RGBA();
-            foreach (Paint fill in geometry.fills.Where(x => x.visible).Reverse())
+            foreach (Paint fill in (geometry.fills ?? Array.Empty<Paint>()).Where(x => x.visible).Reverse())
             {
                 switch (fill)
                 {
@@ -696,6 +697,9 @@ namespace Figma.Core.Uss
                             LogWarningImpossibleDesign(text, $"{nameof(TextElement)} with images, unity places images in background, while figma puts them inside the text");
                             break;
                         }
+
+                        if (image.imageRef == null)
+                            break;
 
                         urlExists = assetsInfo.GetAssetPath(image.imageRef, KnownFormats.png, out url);
 
@@ -726,7 +730,7 @@ namespace Figma.Core.Uss
             }
 
             RGBA finalColor = new();
-            foreach (Paint stroke in geometry.strokes.Where(x => x.visible).Reverse())
+            foreach (Paint stroke in (geometry.strokes ?? Array.Empty<Paint>()).Where(x => x.visible).Reverse())
             {
                 RGBA color = stroke switch
                 {

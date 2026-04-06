@@ -14,14 +14,14 @@ namespace Figma.Core
         #region Fields
         readonly List<CanvasNode> canvases = new(initialCollectionCapacity);
         readonly List<ComponentSetNode> componentSets = new(initialCollectionCapacity);
-        readonly List<FrameNode> frames = new(initialCollectionCapacity);
+        readonly List<DefaultFrameNode> frames = new(initialCollectionCapacity);
         readonly List<(DefaultShapeNode, string hash)> elements = new(initialCollectionCapacity);
         #endregion
 
         #region Properties
         public IReadOnlyList<CanvasNode> Canvases => canvases;
         public IReadOnlyList<ComponentSetNode> ComponentSets => componentSets;
-        public IReadOnlyList<FrameNode> Frames => frames;
+        public IReadOnlyList<DefaultFrameNode> Frames => frames;
         public IReadOnlyList<(DefaultShapeNode node, string hash)> Elements => elements;
         #endregion
 
@@ -40,7 +40,11 @@ namespace Figma.Core
                         componentSets.Add(componentSetNode);
                         break;
 
-                    case FrameNode frameNode when node.parent is CanvasNode:
+                    case ComponentNode componentNode when node.parent is CanvasNode || node.parent is SectionNode:
+                        frames.Add(componentNode);
+                        break;
+
+                    case FrameNode frameNode when node.parent is CanvasNode || node.parent is SectionNode:
                         frames.Add(frameNode);
                         break;
 

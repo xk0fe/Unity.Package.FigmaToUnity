@@ -65,9 +65,9 @@ namespace Figma.Core.Uxml
 
             writer.EndElement();
         }
-        public string CreateFrame(string directory, string[] ussStyleFilesPath, IReadOnlyDictionary<string, string> templates, DefaultFrameNode frameNode)
+        public string CreateFrame(string directory, string[] ussStyleFilesPath, IReadOnlyDictionary<string, string> templates, DefaultFrameNode frameNode, string fileName = null)
         {
-            using UxmlWriter writer = new(directory, frameNode.name);
+            using UxmlWriter writer = new(directory, fileName ?? frameNode.name);
 
             WriteStyles(ussStyleFilesPath, writer);
 
@@ -78,11 +78,15 @@ namespace Figma.Core.Uxml
 
             return writer.filePath;
         }
-        public string CreateComponentSet(string directory, string[] ussStyleFilesPath, ComponentSetNode componentSetNode)
+        public string CreateComponentSet(string directory, string[] ussStyleFilesPath, IReadOnlyDictionary<string, string> templates, ComponentSetNode componentSetNode)
         {
             using UxmlWriter writer = new(directory, componentSetNode.name);
 
             WriteStyles(ussStyleFilesPath, writer);
+
+            foreach ((string templateName, string templatePath) in templates)
+                writer.WriteTemplate(templateName, GetRelativePath(writer.filePath, templatePath));
+
             WriteNodesRecursively(componentSetNode, writer);
 
             return writer.filePath;

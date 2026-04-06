@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using Newtonsoft.Json.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
@@ -57,37 +59,139 @@ namespace Figma
 
             List<string> visibleSceneNodes = new(32);
 
-            if (filter)
+            // collect node IDs declared directly on [Uxml(NodeId = "...")] — avoids the file-level discovery fetch
+            IEnumerable<string> declaredNodeIds = frames
+                .Select(t => t.GetCustomAttribute<Attributes.UxmlAttribute>()?.NodeId)
+                .Where(id => !string.IsNullOrEmpty(id));
+
+            Data data;
+
+            bool pageMode = false;
+
+            if (declaredNodeIds.Any())
             {
-                Progress.SetDescription(progress, "Filtering nodes");
+                // use /nodes endpoint to request only the declared subtrees — avoids fetching siblings
+                string nodeIds = string.Join(",", declaredNodeIds);
+                Progress.SetDescription(progress, "Resolving Figma nodes");
+                string nodesJson = await GetJsonAsync($"files/{fileKey}/nodes?ids={nodeIds}", token);
 
-                Data shallowData = await GetAsync<Data>($"files/{fileKey}?depth=2", token);
-                shallowData.document.SetParent();
+                if (systemCopyBuffer)
+                    GUIUtility.systemCopyBuffer = nodesJson;
 
-                NodeMetadata shallowMetadata = new(shallowData.document, frames, true, false, true);
-                visibleSceneNodes.AddRange(shallowData.document.children.SelectMany(x => x.children).Where(shallowMetadata.EnabledInHierarchy).Select(node => node.id));
+                Progress.Report(progress, 2, steps, "Parsing Figma file");
 
-                Progress.SetDescription(progress, string.Empty);
+                Nodes nodesResponse = await ConvertOnBackgroundAsync<Nodes>(nodesJson, token);
+
+                static Dictionary<TK, TV> MergeDicts<TK, TV>(IEnumerable<Dictionary<TK, TV>> dicts) =>
+                    dicts.Where(d => d != null)
+                         .SelectMany(d => d)
+                         .GroupBy(kv => kv.Key)
+                         .ToDictionary(g => g.Key, g => g.First().Value);
+
+                // detect canvas (page-level) nodes — SceneNodeConverter returns null for CANVAS type
+                JObject rawJson = JObject.Parse(nodesJson);
+                CanvasNode[] canvases = nodesResponse.nodes
+                    .Where(kv => kv.Value?.document == null)
+                    .Select(kv => rawJson["nodes"]?[kv.Key]?["document"] as JObject)
+                    .Where(doc => doc?["type"]?.Value<string>() == NodeType.CANVAS.ToString())
+                    .Select(doc => JsonUtility.FromJObject<CanvasNode>(doc))
+                    .Where(c => c != null)
+                    .ToArray();
+
+                if (canvases.Length > 0)
+                {
+                    // page-level fetch: write all frames from the canvas, no binding filter
+                    pageMode = true;
+                    DocumentNode syntheticDocument = new()
+                    {
+                        type = NodeType.DOCUMENT,
+                        id = "0:0",
+                        name = "Document",
+                        children = canvases
+                    };
+                    data = new Data
+                    {
+                        document = syntheticDocument,
+                        components = MergeDicts(nodesResponse.nodes.Values.Where(v => v != null).Select(v => v.components)),
+                        componentSets = MergeDicts(nodesResponse.nodes.Values.Where(v => v != null).Select(v => v.componentSets)),
+                        styles = MergeDicts(nodesResponse.nodes.Values.Where(v => v != null).Select(v => v.styles)),
+                    };
+                }
+                else
+                {
+                    // frame-level fetch: build synthetic canvas from fetched frames
+                    string pageName = frames
+                        .Select(t => t.GetCustomAttribute<Attributes.UxmlAttribute>()?.Root?.Split('/')[0])
+                        .FirstOrDefault(n => !string.IsNullOrEmpty(n)) ?? "Page";
+
+                    CanvasNode syntheticCanvas = new()
+                    {
+                        type = NodeType.CANVAS,
+                        id = "synthetic:1",
+                        name = pageName,
+                        children = nodesResponse.nodes.Values
+                            .Where(v => v?.document != null)
+                            .Select(v => v.document)
+                            .ToArray()
+                    };
+                    DocumentNode syntheticDocument = new()
+                    {
+                        type = NodeType.DOCUMENT,
+                        id = "0:0",
+                        name = "Document",
+                        children = new[] { syntheticCanvas }
+                    };
+                    data = new Data
+                    {
+                        document = syntheticDocument,
+                        components = MergeDicts(nodesResponse.nodes.Values.Where(v => v != null).Select(v => v.components)),
+                        componentSets = MergeDicts(nodesResponse.nodes.Values.Where(v => v != null).Select(v => v.componentSets)),
+                        styles = MergeDicts(nodesResponse.nodes.Values.Where(v => v != null).Select(v => v.styles)),
+                    };
+                }
             }
+            else
+            {
+                if (filter)
+                {
+                    Progress.SetDescription(progress, "Filtering nodes");
 
-            string idsString = string.Empty;
+                    Data shallowData = await GetAsync<Data>($"files/{fileKey}?depth=3", token);
+                    shallowData.document.SetParent();
 
-            if (visibleSceneNodes.Any())
-                idsString = $"?ids={string.Join(",", visibleSceneNodes)}";
+                    NodeMetadata shallowMetadata = new(shallowData.document, frames, true, false, true);
 
-            Progress.SetDescription(progress, "Resolving Figma file");
-            string json = await GetJsonAsync($"files/{fileKey}{idsString}", token);
+                    // flatten page > direct-child and page > section > child so section-nested frames are reachable
+                    IEnumerable<IBaseNodeMixin> candidates = shallowData.document.children
+                        .SelectMany(page => page.children
+                            .SelectMany(child => child is SectionNode section
+                                ? section.children.Cast<IBaseNodeMixin>()
+                                : new[] { child }));
 
-            if (systemCopyBuffer)
-                GUIUtility.systemCopyBuffer = json;
+                    visibleSceneNodes.AddRange(candidates.Where(shallowMetadata.EnabledInHierarchy).Select(node => node.id));
 
-            Progress.Report(progress, 2, steps, "Parsing Figma file");
+                    Progress.SetDescription(progress, string.Empty);
+                }
 
-            Data data = await ConvertOnBackgroundAsync<Data>(json, token);
+                string idsString = visibleSceneNodes.Any() ? $"?ids={string.Join(",", visibleSceneNodes)}" : string.Empty;
+
+                Progress.SetDescription(progress, "Resolving Figma file");
+                string json = await GetJsonAsync($"files/{fileKey}{idsString}", token);
+
+                if (systemCopyBuffer)
+                    GUIUtility.systemCopyBuffer = json;
+
+                Progress.Report(progress, 2, steps, "Parsing Figma file");
+
+                data = await ConvertOnBackgroundAsync<Data>(json, token);
+            }
             data.document.SetParent();
 
             Progress.SetDescription(progress, "Creating entities");
-            nodeMetadata = new NodeMetadata(data.document, frames, filter);
+            // page mode: disable filter so all frames in the canvas are written regardless of [Uxml] bindings
+            nodeMetadata = pageMode
+                ? new NodeMetadata(data.document, Enumerable.Empty<Type>(), false)
+                : new NodeMetadata(data.document, frames, filter);
             nodesRegistry = new NodesRegistry(data, nodeMetadata);
             stylesPreprocessor = new StylesPreprocessor(data, assetsInfo);
             figmaWriter = new FigmaWriter(assetsInfo.directory, uxmlName, data, stylesPreprocessor, nodeMetadata, assetsInfo);
@@ -204,7 +308,8 @@ namespace Figma
 
             if (nodesRegistry.MissingComponents.Count > 0)
                 foreach (Nodes.Document value in await GetMissingComponentsAsync(nodesRegistry.MissingComponents))
-                    stylesPreprocessor.AddMissingComponent(value.document, value.styles);
+                    if (value.document is ComponentNode componentDoc)
+                        stylesPreprocessor.AddMissingComponent(componentDoc, value.styles);
         }
         async Task GetImageFillsAsync(int progress, List<IBaseNodeMixin> imageFills, CancellationToken token)
         {

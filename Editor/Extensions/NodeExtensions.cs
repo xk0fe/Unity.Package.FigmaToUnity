@@ -42,7 +42,25 @@ namespace Figma
 
             throw new InvalidOperationException(Const.maximumDepthLimitReachedExceptionMessage);
         }
-        internal static bool IsRootNode(this IBaseNodeMixin node) => node is DocumentNode or CanvasNode or ComponentNode || node.parent is CanvasNode or ComponentNode;
+        internal static bool IsRootNode(this IBaseNodeMixin node)
+        {
+            // Document, canvas, and component definitions are always roots
+            if (node is DocumentNode or CanvasNode or ComponentNode)
+                return true;
+
+            // Direct children of a canvas are screen-level frames — always viewports
+            if (node.parent is CanvasNode)
+                return true;
+
+            // Direct children of a ComponentNode: only treat as viewport (full-screen overlay)
+            // when the component uses free-form (non-auto-layout) positioning. When the component
+            // uses auto-layout, its children are flex items and must go through AddLayout instead.
+            if (node.parent is ComponentNode parentComponent)
+                return parentComponent.layoutMode is LayoutMode.NONE ||
+                       node is ILayoutMixin { layoutPositioning: LayoutPositioning.ABSOLUTE };
+
+            return false;
+        }
         internal static bool IsSvgNode(this IBaseNodeMixin node) => node is LineNode or EllipseNode or RegularPolygonNode or StarNode or VectorNode ||
                                                                     (node is BooleanOperationNode && node.Flatten().Any(x => x is not BooleanOperationNode && IsVisible(x) && IsSvgNode(x)));
         internal static bool IsVisible(this IBaseNodeMixin node) => (node is not ISceneNodeMixin scene || scene.visible) && (node.parent == null || node.parent.IsVisible());

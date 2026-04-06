@@ -602,7 +602,7 @@ namespace Figma.Internals
     {
         public class Document
         {
-            public ComponentNode document;
+            public SceneNode document;
             public Dictionary<string, Component> components;
             public Dictionary<string, Component> componentSets;
             public double schemaVersion;

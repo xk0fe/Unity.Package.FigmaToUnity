@@ -42,6 +42,7 @@ namespace Figma.Internals
                     new ExportSettingsArrayConverter(),
                     new TransitionConverter(),
                     new BaseNodeArrayConverter(),
+                    new SceneNodeConverter(),
                     new SceneNodeArrayConverter()
                 }
             };
@@ -63,6 +64,7 @@ namespace Figma.Internals
 
             return serializer.Deserialize<T>(jsonTextReader);
         }
+        public static T FromJObject<T>(JObject obj) => obj.ToObject<T>(serializer);
         #endregion
     }
 
@@ -105,6 +107,8 @@ namespace Figma.Internals
                 EffectType.DROP_SHADOW => obj.ToObject<ShadowEffect>(serializer),
                 EffectType.LAYER_BLUR => obj.ToObject<BlurEffect>(serializer),
                 EffectType.BACKGROUND_BLUR => obj.ToObject<BlurEffect>(serializer),
+                EffectType.GLASS => obj.ToObject<BlurEffect>(serializer),
+                EffectType.TEXTURE => obj.ToObject<BlurEffect>(serializer),
                 _ => throw new NotSupportedException()
             };
         #endregion
@@ -123,6 +127,7 @@ namespace Figma.Internals
                 PaintType.GRADIENT_DIAMOND => obj.ToObject<GradientPaint>(serializer),
                 PaintType.IMAGE => obj.ToObject<ImagePaint>(serializer),
                 PaintType.EMOJI => obj.ToObject<ImagePaint>(serializer),
+                PaintType.VIDEO => obj.ToObject<ImagePaint>(serializer),
                 _ => throw new NotSupportedException()
             };
         #endregion
@@ -193,6 +198,38 @@ namespace Figma.Internals
         #endregion
     }
 
+    public class SceneNodeConverter : JsonConverter
+    {
+        static SceneNode ToObject(JObject obj, JsonSerializer serializer)
+        {
+            NodeType nodeType = (NodeType)Enum.Parse(typeof(NodeType), obj["type"].Value<string>());
+            return nodeType switch
+            {
+                NodeType.SLICE => obj.ToObject<SliceNode>(serializer),
+                NodeType.FRAME => obj.ToObject<FrameNode>(serializer),
+                NodeType.GROUP => obj.ToObject<GroupNode>(serializer),
+                NodeType.COMPONENT_SET => obj.ToObject<ComponentSetNode>(serializer),
+                NodeType.COMPONENT => obj.ToObject<ComponentNode>(serializer),
+                NodeType.INSTANCE => obj.ToObject<InstanceNode>(serializer),
+                NodeType.BOOLEAN_OPERATION => obj.ToObject<BooleanOperationNode>(serializer),
+                NodeType.VECTOR => obj.ToObject<VectorNode>(serializer),
+                NodeType.STAR => obj.ToObject<StarNode>(serializer),
+                NodeType.LINE => obj.ToObject<LineNode>(serializer),
+                NodeType.ELLIPSE => obj.ToObject<EllipseNode>(serializer),
+                NodeType.REGULAR_POLYGON => obj.ToObject<RegularPolygonNode>(serializer),
+                NodeType.RECTANGLE => obj.ToObject<RectangleNode>(serializer),
+                NodeType.TEXT => obj.ToObject<TextNode>(serializer),
+                NodeType.SECTION => obj.ToObject<SectionNode>(serializer),
+                NodeType.TABLE or NodeType.TABLE_CELL => obj.ToObject<FrameNode>(serializer),
+                NodeType.CANVAS => null, // canvas nodes are not SceneNodes; handled separately in FigmaDownloader
+                _ => throw new NotSupportedException()
+            };
+        }
+        public override bool CanConvert(Type objectType) => objectType == typeof(SceneNode);
+        public override object ReadJson(JsonReader reader, Type objectType, object existingValue, JsonSerializer serializer) => ToObject(JObject.Load(reader), serializer);
+        public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer) => throw new NotImplementedException();
+    }
+
     public class SceneNodeArrayConverter : ArrayConverter<SceneNode, NodeType>
     {
         #region Methods
@@ -214,6 +251,8 @@ namespace Figma.Internals
                 NodeType.RECTANGLE => obj.ToObject<RectangleNode>(serializer),
                 NodeType.TEXT => obj.ToObject<TextNode>(serializer),
                 NodeType.SECTION => obj.ToObject<SectionNode>(serializer),
+                NodeType.TABLE => obj.ToObject<FrameNode>(serializer),
+                NodeType.TABLE_CELL => obj.ToObject<FrameNode>(serializer),
                 _ => throw new NotSupportedException()
             };
         #endregion

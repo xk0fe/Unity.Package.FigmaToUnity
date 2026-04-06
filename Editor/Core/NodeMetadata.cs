@@ -136,8 +136,14 @@ namespace Figma
                 if (uxml is null)
                     return;
 
-                IBaseNodeMixin elementRoot = Find(documentNode, uxml.Root);
-                IBaseNodeMixin[] elementPreserve = uxml.Preserve.Select(x => Find(documentNode, x)).ToArray();
+                // when a node ID is known, look up by ID first — path-based lookup fails when
+                // GET /files?ids= strips section nodes from the parent chain
+                IBaseNodeMixin elementRoot = !string.IsNullOrEmpty(uxml.NodeId)
+                    ? documentNode.Flatten().FirstOrDefault(n => n.id == uxml.NodeId) ?? Find(documentNode, uxml.Root, throwExceptions, silent)
+                    : Find(documentNode, uxml.Root, throwExceptions, silent);
+                if (elementRoot is null)
+                    return;
+                IBaseNodeMixin[] elementPreserve = uxml.Preserve.Select(x => Find(documentNode, x, throwExceptions, silent)).Where(x => x != null).ToArray();
 
                 rootMetadata.Add(elementRoot, new RootMetadata(filter, uxml, uxml.DownloadImages));
 
