@@ -85,12 +85,12 @@ namespace Figma
                     framesPaths.TryAdd(section.name, new List<string>());
             }
 
-            List<Task> tasks = new(rootNodes.Frames.Count + rootNodes.ComponentSets.Count + rootNodes.Elements.Count);
-            tasks.AddRange(rootNodes.Frames.Select(x => Task.Run(() => WriteFrame(uxmlBuilder, framesPaths, componentSets, x))));
-            tasks.AddRange(rootNodes.ComponentSets.Select(x => Task.Run(() => WriteComponentSet(uxmlBuilder, componentSets, x))));
-            tasks.AddRange(rootNodes.Elements.Select(x => Task.Run(() => WriteTemplate(uxmlBuilder, x))));
+            // write sequentially to avoid file sharing violations when multiple frames produce the same filename
+            foreach (var x in rootNodes.Frames) WriteFrame(uxmlBuilder, framesPaths, componentSets, x);
+            foreach (var x in rootNodes.ComponentSets) WriteComponentSet(uxmlBuilder, componentSets, x);
+            foreach (var x in rootNodes.Elements) WriteTemplate(uxmlBuilder, x);
 
-            await Task.WhenAll(tasks);
+            await Task.CompletedTask;
 
             // Creating main UXML document
             if (overrideGlobal)
