@@ -92,7 +92,7 @@ namespace Figma
                 JObject rawJson = JObject.Parse(nodesJson);
                 CanvasNode[] canvases = nodesResponse.nodes
                     .Where(kv => kv.Value?.document == null)
-                    .Select(kv => rawJson["nodes"]?[kv.Key]?["document"] as JObject)
+                    .Select(kv => rawJson["nodes"]?[kv.Key] is JObject nodeObj ? nodeObj["document"] as JObject : null)
                     .Where(doc => doc?["type"]?.Value<string>() == NodeType.CANVAS.ToString())
                     .Select(doc => JsonUtility.FromJObject<CanvasNode>(doc))
                     .Where(c => c != null)
